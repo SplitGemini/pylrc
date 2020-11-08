@@ -6,11 +6,13 @@ from .utilities import validateTimecode
 synced_line_regex = re.compile(r'^(\[[0-5]?\d:[0-5]?\d(\.\d+)?\])+.*', flags=re.MULTILINE)
 
 
-def parse(lrc):
+def parse(lrc, music_path):
     lines = lrc.splitlines()
     lyrics = Lyrics()
     items = []
-
+    lyrics.music_path = music_path
+    offset = 0
+    
     for line in lines:
         if not line:
             continue
@@ -35,7 +37,7 @@ def parse(lrc):
 
         elif line.startswith('[offset:'):
             try:
-                lyrics.offset = int(line.rstrip()[8:-1].lstrip())
+                offset = int(line.rstrip()[8:-1].lstrip())
             except ValueError:
                 pass
 
@@ -61,8 +63,8 @@ def parse(lrc):
 
     lyrics.extend(sorted(items))
 
-    if not lyrics.offset == 0:
-        millis = lyrics.offset
+    if not offset == 0:
+        millis = offset
 
         minutes = int(millis / 60000)
         millis -= minutes * 60000
@@ -72,6 +74,5 @@ def parse(lrc):
 
         for line in lyrics:
             line.shift(minutes=minutes, seconds=secs, milliseconds=millis)
-        lyrics.offset = 0
-
+    lyrics.check()
     return lyrics

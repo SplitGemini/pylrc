@@ -1,5 +1,4 @@
-from .utilities import unpackTimecode, findEvenSplit
-
+from .utilities import unpackTimecode, findEvenSplit, getDuration, containsAny
 
 class LyricLine:
     """An object that holds a lyric line and it's time"""
@@ -7,13 +6,12 @@ class LyricLine:
     def __init__(self, timecode, text=""):
         self.hours = 0
         self.minutes, self.seconds, self.milliseconds = unpackTimecode(timecode)
-        self.time = sum([(self.hours * 3600), (self.minutes * 60),
-                         self.seconds, (self.milliseconds / 1000)])
+        self.time = 0
         self.text = text
+        self._check()
 
     def shift(self, minutes=0, seconds=0, milliseconds=0):
         """Shift the timecode by the given amounts"""
-
         self.addMinutes(minutes)
         self.addSeconds(seconds)
         self.addMillis(milliseconds)
@@ -80,6 +78,22 @@ class LyricLine:
         self.time = sum([(self.hours * 3600), (self.minutes * 60),
                          self.seconds, (self.milliseconds / 1000)])
 
+    def toSrtTimeCode(self):
+        ho = "{:02d}".format(self.hours)
+        min = "{:02d}".format(self.minutes)
+        sec = "{:02d}".format(self.seconds)
+        milli = "{:03d}".format(self.milliseconds)
+        timecode = ''.join([ho, ':', min, ':', sec, ',', milli])
+        return timecode
+
+    def toLrcTimeCode(self):
+        # 分钟 + 小时 * 60，大于99截断前部，只取后部
+        min = "{:02d}".format(self.minutes + self.hours * 60)[-2:]
+        sec = "{:02d}".format(self.seconds)
+        milli = "{:03d}".format(self.milliseconds)
+        timecode = ''.join(['[', min, ':', sec, '.', milli, ']'])
+        return timecode
+
     def __lt__(self, other):
         """For sorting instances of this class"""
         return self.time < other.time
@@ -89,7 +103,6 @@ class Lyrics(list):
     """A list that holds the contents of the lrc file"""
 
     def __init__(self, items=None):
-
         super().__init__()
         if items is None:
             items = []
@@ -99,44 +112,31 @@ class Lyrics(list):
         self.author = ""
         self.lrc_creator = ""
         self.length = ""
-        self.offset = 0
-
         self.extend(items)
-
+        self.music_path = ""
+        
+        
     def toSRT(self):
         """Returns an SRT string of the LRC data"""
-
-        if not self[-1].text.rstrip() == "":
-            timecode = ''.join(['[', str(self[-1].minutes), ':',
-                                str(self[-1].seconds), '.',
-                                str(self[-1].milliseconds), ']'])
-            end_line = LyricLine(timecode, "")
-            end_line.shift(seconds=5)
-            self.append(end_line)
-
         output = []
-        for i in range(len(self) - 1):
-            if not self[i].text == '':
-                srt = str(i) + '\n'
-                start_hours = "%02d" % self[i].hours
-                start_min = "%02d" % self[i].minutes
-                start_sec = "%02d" % self[i].seconds
-                start_milli = "%03d" % self[i].milliseconds
-                start_timecode = ''.join([start_hours, ':', start_min,
-                                          ':', start_sec, ',', start_milli])
-                end_hours = "%02d" % self[i + 1].hours
-                end_min = "%02d" % self[i + 1].minutes
-                end_sec = "%02d" % self[i + 1].seconds
-                milliseconds = self[i + 1].milliseconds - 1
-                end_milli = "%03d" % (0 if milliseconds < 0 else milliseconds)
-                end_timecode = ''.join([end_hours, ':', end_min,
-                                        ':', end_sec, ',', end_milli])
-
-                srt = srt + start_timecode + ' --> ' + end_timecode + '\n'
-                if len(self[i].text) > 31:
-                    srt = srt + findEvenSplit(self[i].text) + '\n'
+        j = 1
+        for i in range(len(self)):
+            if not self[i].text.isspace() and self[i].text:
+                # print("lyric " + str(j) + ": " + self[i].text + ", time: " + str(self[i].time))
+                # 去除字幕组简介
+                if j == 1 and containsAny(self[i].text):
+                    continue
+                srt = str(j) + '\n'
+                j += 1
+                if not i == len(self) - 1:
+                    end_timecode = self[i + 1].toSrtTimeCode()
                 else:
-                    srt = srt + self[i].text + '\n'
+                    end_timecode = getDuration(self.music_path)
+                srt = srt + self[i].toSrtTimeCode() + ' --> ' + end_timecode + '\n'
+                if len(self[i].text) > 31:
+                    srt = srt + findEvenSplit(self[i].text).strip() + '\n'
+                else:
+                    srt = srt + self[i].text.strip() + '\n'
                 output.append(srt)
 
         return '\n'.join(output).rstrip()
@@ -155,18 +155,35 @@ class Lyrics(list):
             output.append('[by:' + self.lrc_creator + ']')
         if self.length != "":
             output.append('[length:' + self.length + ']')
-        if self.offset != 0:
-            output.append('[offset:' + str(self.offset) + ']')
 
         if output:
             output.append('')
-
+        first = True
         for i in self:
-            minutes = "%02d" % i.minutes
-            seconds = "%02d" % i.seconds
-            milliseconds = ("%02d" % i.milliseconds)[0:2]
-
-            lrc = ''.join(['[', minutes, ':', seconds, '.', milliseconds, ']'])
-            lrc += i.text
+            # 去除字幕组简介
+            if first and containsAny(i.text):
+                continue
+            # 去除前面空白
+            if first and (i.text.isspace() or not i.text):
+                continue
+            first = False
+            lrc = i.toLrcTimeCode() + i.text.strip()
             output.append(lrc)
         return '\n'.join(output).rstrip()
+
+    def check(self):
+        j = 0
+        lastItem = self[len(self) - 1]
+        for i in range(len(self) - 2,-1,-1):
+            currentItem = self[i]
+            if currentItem.time == lastItem.time:
+                if currentItem.text.isspace() or not currentItem.text:
+                    self.remove(currentItem)
+                    j += 1
+                elif lastItem.text.isspace() or not lastItem.text:
+                    self.remove(lastItem)
+                    j += 1
+            else:
+                lastItem = currentItem
+        if j != 0:
+            print("删除重复时间" + str(j) + "次")
